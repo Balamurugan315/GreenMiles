@@ -10,7 +10,7 @@ import {
 
 const ORS_GEOCODE_URL = "https://api.openrouteservice.org/geocode/search";
 const ORS_DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
-const ORS_API_KEY = import.meta.env.VITE_ORS_KEY as string | undefined;
+const ORS_API_KEY= "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImZhYzk1ODcyZGQ3MDQ2MzhhZDkyYWE2MGQ1MzVjMTI4IiwiaCI6Im11cm11cjY0In0="| undefined;
 
 const MIN_FAST_CHARGER_KW = 50;
 const CHARGER_SEARCH_RADIUS_KM = 20;
