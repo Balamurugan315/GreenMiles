@@ -433,19 +433,22 @@ async function chooseBestStop(
   };
 }
 
-function createSimulatedCommunityVehicles(routePoint: Coordinate): CommunityRescueVehicle[] {
+function createSimulatedCommunityVehicles(
+  routePoint: Coordinate,
+  receiverRouteDirection: string,
+): CommunityRescueVehicle[] {
   return [
     {
       vehicleId: "EV-COMM-101",
       currentLocation: { lat: routePoint.lat + 0.018, lng: routePoint.lng - 0.012 },
-      routeDirection: "same corridor outbound",
+      routeDirection: receiverRouteDirection,
       availableBatteryPercent: 62,
       supportsReverseCharging: true,
     },
     {
       vehicleId: "EV-COMM-202",
       currentLocation: { lat: routePoint.lat - 0.026, lng: routePoint.lng + 0.01 },
-      routeDirection: "nearby local route",
+      routeDirection: receiverRouteDirection.split("-")[0] ?? "nearby local route",
       availableBatteryPercent: 48,
       supportsReverseCharging: true,
     },
@@ -558,6 +561,7 @@ export async function planEvTrip(params: {
     for (let i = 1; i <= stopsNeeded; i += 1) {
       const distanceFromStartKm = planningLegRangeKm * i;
       const routePoint = pointAtDistanceAlongRoute(route.geometry, distanceFromStartKm);
+      const receiverRouteDirection = `${params.startLocation}-${params.destination}`;
       const energyRequiredForLegKwh = Number(
         (planningLegRangeKm * estimatedConsumptionKwhPerKm).toFixed(2),
       );
@@ -570,24 +574,26 @@ export async function planEvTrip(params: {
       );
 
       if (!stop) {
+        const localStations = await fetchChargersNearPoint(routePoint);
         const scenario = detectOutOfChargeScenario({
           batteryPercent: params.currentBatteryPercent,
           criticalThresholdPercent: 5,
-          nearbyStationsCount: 0,
+          nearbyStationsCount: localStations.length,
           stationRadiusKm: CHARGER_SEARCH_RADIUS_KM,
         });
 
         if (scenario.shouldTriggerRescue && params.enableCommunityRescue !== false) {
-          const fallbackVehicles = params.communityVehicles ?? createSimulatedCommunityVehicles(routePoint);
+          const fallbackVehicles =
+            params.communityVehicles ??
+            createSimulatedCommunityVehicles(routePoint, receiverRouteDirection);
           const matchedRescueVehicles = findNearbyRescueVehicles({
             receiverLocation: routePoint,
-            receiverRouteDirection: `${params.startLocation}-${params.destination}`,
+            receiverRouteDirection,
             vehicles: fallbackVehicles,
             maxDistanceKm: 10,
             minimumDonorBatteryPercent: 40,
           });
 
-          const localStations = await fetchChargersNearPoint(routePoint);
           const rescueSimulation = simulateReverseCharging({
             receiverCurrentBatteryPercent: params.currentBatteryPercent,
             receiverBatteryCapacityKwh: DEFAULT_RECEIVER_BATTERY_KWH,
@@ -615,7 +621,45 @@ export async function planEvTrip(params: {
           };
 
           if (rescueSimulation.rescueFound) {
-            break;
+            return {
+              start: params.startLocation,
+              destination: params.destination,
+              startCoordinate: start,
+              destinationCoordinate: destination,
+              totalDistanceKm: route.distanceKm,
+              usableRangeKm,
+              planningLegRangeKm,
+              requiresCharging: chargingStops.length > 0,
+              chargingStopsRequired: chargingStops.length,
+              chargingStops,
+              message: `Community rescue activated. ${rescueSimulation.reason}.`,
+              routeGeometry: route.geometry,
+              communityRescue: rescueDetails,
+              estimatedCost: {
+                currency: "INR",
+                estimatedTotal: Number(
+                  chargingStops
+                    .reduce((sum, s) => sum + s.estimatedChargingCostInr, 0)
+                    .toFixed(2),
+                ),
+                note: `Estimated using base tariff Rs.${BASE_GRID_TARIFF_INR_PER_KWH}/kWh with solar/hybrid discounts when available.`,
+              },
+              batteryModel: {
+                consumptionPerKm: Number((1 / Math.max(params.evMaxRangeKm, 1)).toFixed(4)),
+                note: "Default normalized consumption model (battery fraction per km).",
+              },
+              mapData: {
+                route: route.geometry,
+                stops: chargingStops.map((s) => ({ lat: s.latitude, lng: s.longitude })),
+              },
+              sustainability: {
+                score: chargingStops.length > 0 ? 70 : 50,
+                co2SavingsKg: Number(
+                  chargingStops.filter((s) => s.energySource !== "grid").length * 1.4,
+                ),
+                note: "Includes community rescue fallback and available solar/hybrid stop mix.",
+              },
+            };
           }
         }
 
